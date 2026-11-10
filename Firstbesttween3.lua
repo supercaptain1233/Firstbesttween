@@ -1,7 +1,7 @@
 --[[
-    FIRST BEST TWEEN — v2
+    FIRST BEST TWEEN — v4
     Mobile / Delta / universal
-    Loadstring: loadstring(game:HttpGet("https://raw.githubusercontent.com/supercaptain1233/Firstbesttween/main/Firstbesttween.lua"))()
+    Loadstring: loadstring(game:HttpGet("https://raw.githubusercontent.com/supercaptain1233/Firstbesttween/main/Firstbesttween3.lua"))()
 ]]
 
 --============ PROTECTION ============
@@ -12,7 +12,7 @@ if typeof(setthreadidentity) == "function" then pcall(setthreadidentity, 7) end
 if typeof(setidentity) == "function" then pcall(setidentity, 7) end
 if typeof(setfpscap) == "function" then pcall(setfpscap, 60) end
 
-local RAW_URL = "https://raw.githubusercontent.com/supercaptain1233/Firstbesttween/main/Firstbesttween.lua"
+local RAW_URL = "https://raw.githubusercontent.com/supercaptain1233/Firstbesttween/main/Firstbesttween3.lua"
 local PATCH_URL = "https://raw.githubusercontent.com/supercaptain1233/Firstbesttween/main/patches/%s.lua"
 local FOLDER = "FirstBestTween"
 local STORE = FOLDER .. "/saves.json"
@@ -35,11 +35,11 @@ local TweenService = cloneref(game:GetService("TweenService"))
 local Http = cloneref(game:GetService("HttpService"))
 local TPS = cloneref(game:GetService("TeleportService"))
 local SG = cloneref(game:GetService("StarterGui"))
+local PFS = cloneref(game:GetService("PathfindingService"))
 
 local LP = Players.LocalPlayer
 if not LP then return end
 
--- travel speed, deliberately human-ish so it reads as movement not teleporting
 local SPEED = 420
 local MIN_T = 0.14
 local MAX_T = 0.95
@@ -93,6 +93,7 @@ end
 local function learnUp(style)
     data.learn[style] = (data.learn[style] or 0) + 1
     data.trips = (data.trips or 0) + 1
+    data.lastStyle = style
     persist()
 end
 
@@ -130,7 +131,6 @@ end)
 pcall(function() SG:SetCore("ResetButtonCallback", true) end)
 
 --============ COLLISION / NOCLIP ============
--- guards are armed from boot, so noclip wins the instant it is needed
 local noclipOn = false
 local noclipConns = {}
 local forced = setmetatable({}, { __mode = "k" })
@@ -177,6 +177,17 @@ local function installCollision(char)
     end))
 end
 
+-- three sweeps per frame plus per-part guards: nothing gets the property back
+local function noclipSweep()
+    local char = LP.Character
+    if not char then return end
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("BasePart") and d.CanCollide then
+            pcall(function() d.CanCollide = false end)
+        end
+    end
+end
+
 local function setNoclip(on)
     local char = LP.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -188,14 +199,13 @@ local function setNoclip(on)
             pcall(function()
                 hum.PlatformStand = true
                 hum.WalkSpeed = 0
+                hum.AutoRotate = false
                 hum:ChangeState(Enum.HumanoidStateType.Physics)
+                hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+                hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
             end)
         end
-        if char then
-            for _, d in ipairs(char:GetDescendants()) do
-                if d:IsA("BasePart") then pcall(function() d.CanCollide = false end) end
-            end
-        end
+        noclipSweep()
     else
         noclipOn = false
         if char then
@@ -206,6 +216,9 @@ local function setNoclip(on)
         if hum then
             pcall(function()
                 hum.PlatformStand = false
+                hum.AutoRotate = true
+                hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, true)
+                hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, true)
                 if baseSpeed then hum.WalkSpeed = baseSpeed end
                 hum:ChangeState(Enum.HumanoidStateType.Running)
             end)
@@ -222,18 +235,15 @@ end))
 track(RunService.Heartbeat:Connect(function()
     local char = LP.Character
     if not char then return end
-    if noclipOn then
-        for _, d in ipairs(char:GetDescendants()) do
-            if d:IsA("BasePart") and d.CanCollide then
-                pcall(function() d.CanCollide = false end)
-            end
-        end
-        return
-    end
+    if noclipOn then noclipSweep() return end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if hrp and not hrp.CanCollide then
         pcall(function() hrp.CanCollide = true end)
     end
+end))
+
+track(RunService.RenderStepped:Connect(function()
+    if noclipOn then noclipSweep() end
 end))
 
 --============ STATE ============
@@ -602,7 +612,61 @@ local function canSee(a, b)
     return rayHit(a, b) == nil
 end
 
--- sweep the wall itself, ring by ring, looking for a gap
+local function pathOnce(from, to, radius, budget)
+    local ok, out = pcall(function()
+        local path = PFS:CreatePath({
+            AgentRadius = radius,
+            AgentHeight = 5,
+            AgentCanJump = true,
+            AgentJumpHeight = 12,
+            AgentMaxSlope = 70,
+            WaypointSpacing = 4,
+        })
+
+        local done, failed = false, false
+        task.spawn(function()
+            if not pcall(function() path:ComputeAsync(from, to) end) then failed = true end
+            done = true
+        end)
+
+        local t0 = os.clock()
+        while not done and (os.clock() - t0) < budget do
+            RunService.Heartbeat:Wait()
+        end
+        if failed or not done then return nil end
+        if path.Status ~= Enum.PathStatus.Success then return nil end
+
+        local wps = path:GetWaypoints()
+        if #wps < 2 then return nil end
+
+        local list = {}
+        for i = 2, #wps do list[#list + 1] = wps[i].Position end
+        list[#list + 1] = to
+        return list
+    end)
+    if ok and out then return out end
+    return nil
+end
+
+-- two passes: a thin agent threads narrow gaps, a fat one ignores clutter
+local function findPath(from, to)
+    local a = pathOnce(from, to, 1.6, 1.6)
+    if a then return a end
+    local b = pathOnce(from, to, 4.5, 1.2)
+    if b then return b end
+    return nil
+end
+
+local function pushThrough(p, n, from, to)
+    for _, s in ipairs({ 2, 4, 7, 12, 20, 32, 50, 75, 110, 160, 230, 320 }) do
+        local beyond = p + n * s
+        if canSee(from, p) and canSee(p, beyond) and canSee(beyond, to) then
+            return beyond
+        end
+    end
+    return nil
+end
+
 local function scanWall(hit, from, to)
     local n = hit.Normal
     local t1 = n:Cross(Vector3.new(0, 1, 0))
@@ -611,13 +675,30 @@ local function scanWall(hit, from, to)
     local t2 = n:Cross(t1).Unit
     local base = hit.Position
 
-    for _, r in ipairs({ 4, 8, 13, 20, 30, 44, 62, 84 }) do
-        for a = 0, 330, 30 do
+    for _, r in ipairs({ 3, 6, 10, 16, 24, 34, 46, 62, 82, 106, 136, 172, 216, 270, 335, 410 }) do
+        for a = 0, 345, 15 do
             local rad = math.rad(a)
             local p = base + t1 * (math.cos(rad) * r) + t2 * (math.sin(rad) * r)
-            local beyond = p + n * 4
-            if canSee(from, p) and canSee(p, beyond) and canSee(beyond, to) then
-                return beyond
+            local beyond = pushThrough(p, n, from, to)
+            if beyond then return beyond end
+        end
+    end
+    return nil
+end
+
+-- probe several faces of the blockage, not just the nearest one
+local function scanBlock(from, to)
+    local dir = to - from
+    for _, t in ipairs({ 0.3, 0.5, 0.7, 0.88 }) do
+        local probeFrom = from + dir * t
+        local hit = rayHit(probeFrom, to)
+        if hit then
+            local beyond = scanWall(hit, probeFrom, to)
+            if beyond then
+                if canSee(from, beyond) then return beyond end
+                local via = scanWall(rayHit(from, probeFrom) or hit, from, probeFrom)
+                if via and canSee(via, beyond) then return via end
+                if canSee(from, probeFrom) then return beyond end
             end
         end
     end
@@ -631,7 +712,7 @@ local function findSide(from, to)
     if flat.Magnitude < 1 then flat = Vector3.new(1, 0, 0) end
     flat = flat.Unit
     local side = Vector3.new(-flat.Z, 0, flat.X)
-    for _, off in ipairs({ 10, 20, 34, 52, 74, 100 }) do
+    for _, off in ipairs({ 8, 16, 26, 40, 58, 82, 112, 150 }) do
         for _, s in ipairs({ 1, -1 }) do
             local mid = from + flat * (dist * 0.5) + side * (off * s) + Vector3.new(0, 4, 0)
             if canSee(from, mid) and canSee(mid, to) then
@@ -643,8 +724,8 @@ local function findSide(from, to)
 end
 
 local function findClimb(from, to)
-    local h = 16
-    for _ = 1, 4 do
+    local h = 12
+    for _ = 1, 5 do
         local u1 = from + Vector3.new(0, h, 0)
         local u2 = to + Vector3.new(0, h, 0)
         if canSee(from, u1) and canSee(u1, u2) and canSee(u2, to) then
@@ -655,24 +736,40 @@ local function findClimb(from, to)
     return nil
 end
 
--- hole first, noclip only when there is genuinely no gap
+-- drop corners that are already visible from the previous kept point
+local function smooth(from, route)
+    local out, last = {}, from
+    for i = 1, #route do
+        local p = route[i]
+        local nxt = route[i + 1]
+        if not nxt or not canSee(last, nxt) then
+            out[#out + 1] = p
+            last = p
+        end
+    end
+    return out
+end
+
 local function buildRoute(from, to, depth)
     if canSee(from, to) then return { to }, "direct" end
 
-    local hit = rayHit(from, to)
-    if hit then
-        local beyond = scanWall(hit, from, to)
-        if beyond then
-            if depth < 1 then
-                local rest = buildRoute(beyond, to, depth + 1)
-                if rest then
-                    local list = { beyond }
-                    for _, p in ipairs(rest) do list[#list + 1] = p end
-                    return list, "hole"
-                end
+    local dist = (to - from).Magnitude
+    if dist > 8 then
+        local path = findPath(from, to)
+        if path and #path > 0 then return smooth(from, path), "path" end
+    end
+
+    local beyond = scanBlock(from, to)
+    if beyond then
+        if depth < 1 then
+            local rest = buildRoute(beyond, to, depth + 1)
+            if rest then
+                local list = { beyond }
+                for _, p in ipairs(rest) do list[#list + 1] = p end
+                return smooth(from, list), "hole"
             end
-            return { beyond, to }, "hole"
         end
+        return { beyond, to }, "hole"
     end
 
     local s = findSide(from, to)
@@ -727,7 +824,7 @@ local function travel(target)
     busy = true
     token = token + 1
     local myToken = token
-    playBtn.Text = "GOING"
+    playBtn.Text = "ROUTING"
     playBtn.BackgroundColor3 = Color3.fromRGB(70, 110, 60)
 
     setNoclip(true)
@@ -748,8 +845,11 @@ local function travel(target)
 
     setNoclip(false)
     busy = false
-    playBtn.Text = "PLAY"
+    playBtn.Text = string.upper(style)
     playBtn.BackgroundColor3 = Color3.fromRGB(38, 120, 76)
+    task.delay(1.4, function()
+        if not busy then playBtn.Text = "PLAY" end
+    end)
 
     if token == myToken then
         learnUp(style)
@@ -842,7 +942,7 @@ local function destroy()
     if getgenv then getgenv().FirstBestTween = nil end
 end
 
-local api = { destroy = destroy, version = "2.0", data = data, celebrate = celebrate }
+local api = { destroy = destroy, version = "4.0", data = data, celebrate = celebrate }
 if getgenv then getgenv().FirstBestTween = api end
 
 task.spawn(function()
