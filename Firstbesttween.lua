@@ -1,7 +1,7 @@
 --[[
     FIRST BEST TWEEN — v2
     Mobile / Delta / universal
-    Loadstring: loadstring(game:HttpGet("https://raw.githubusercontent.com/supercaptain1233/firstbesttween/main/firstbesttween.lua"))()
+    Loadstring: loadstring(game:HttpGet("https://raw.githubusercontent.com/supercaptain1233/Firstbesttween/main/Firstbesttween.lua"))()
 ]]
 
 --============ PROTECTION ============
@@ -12,8 +12,8 @@ if typeof(setthreadidentity) == "function" then pcall(setthreadidentity, 7) end
 if typeof(setidentity) == "function" then pcall(setidentity, 7) end
 if typeof(setfpscap) == "function" then pcall(setfpscap, 60) end
 
-local RAW_URL = "https://raw.githubusercontent.com/supercaptain1233/firstbesttween/main/firstbesttween.lua"
-local PATCH_URL = "https://raw.githubusercontent.com/supercaptain1233/firstbesttween/main/patches/%s.lua"
+local RAW_URL = "https://raw.githubusercontent.com/supercaptain1233/Firstbesttween/main/Firstbesttween.lua"
+local PATCH_URL = "https://raw.githubusercontent.com/supercaptain1233/Firstbesttween/main/patches/%s.lua"
 local FOLDER = "FirstBestTween"
 local STORE = FOLDER .. "/saves.json"
 local TAG = "FBT_" .. tostring(math.random(100000, 999999))
